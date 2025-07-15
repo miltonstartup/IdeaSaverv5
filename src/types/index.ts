@@ -7,11 +7,15 @@
  */
 export interface AudioRecording {
   id: string;
-  audioUrl: string;
+  name: string;
+  date: string;
   duration: number;
-  timestamp: Date;
+  audioDataUri?: string;
   transcription?: string;
-  title?: string;
+  summary?: string;
+  expandedContent?: string;
+  actionItems?: string[];
+  tags?: string[];
 }
 
 /**
@@ -50,9 +54,12 @@ export interface UserProfile {
 export interface UserSettings {
   language: 'en' | 'es';
   theme: 'light' | 'dark' | 'auto';
-  autoTranscription: boolean;
-  defaultTags: string[];
-  voiceRecognitionEnabled: boolean;
+  cloudSyncEnabled: boolean;
+  autoCloudSync: boolean;
+  deletionPolicyDays: number;
+  autoTranscribe: boolean;
+  autoSummarize: boolean;
+  defaultTags?: string[];
 }
 
 /**

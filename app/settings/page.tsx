@@ -23,15 +23,20 @@ import {
   Download,
   Upload,
   LogOut,
-  Crown
+  Crown,
+  Save,
+  Check,
+  X
 } from 'lucide-react';
+import { saveSettingsLocally, loadSettingsLocally } from '@/src/lib/storage';
+import { UserSettings } from '@/src/types';
 
 /**
  * Settings page - Manage user preferences and account settings
  * Protected route requiring authentication
  */
 export default function SettingsPage() {
-  const { user, profile, isLoading, updateCredits, signOut } = useAuth();
+  const { user, profile, isLoading, updateProfile, signOut } = useAuth();
   const router = useRouter();
   const { toast } = useToast();
 
@@ -39,7 +44,10 @@ export default function SettingsPage() {
   const [cloudSyncEnabled, setCloudSyncEnabled] = useState(false);
   const [autoCloudSync, setAutoCloudSync] = useState(false);
   const [deletionPolicy, setDeletionPolicy] = useState('never');
+  const [autoTranscribe, setAutoTranscribe] = useState(true);
+  const [autoSummarize, setAutoSummarize] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
+  const [hasChanges, setHasChanges] = useState(false);
 
   // Initialize local state from profile once loaded
   useEffect(() => {
@@ -47,8 +55,29 @@ export default function SettingsPage() {
       setCloudSyncEnabled(profile.cloud_sync_enabled || false);
       setAutoCloudSync(profile.auto_cloud_sync || false);
       setDeletionPolicy(profile.deletion_policy_days === 0 ? 'never' : String(profile.deletion_policy_days));
+      
+      // Try to load additional settings from localStorage
+      if (user) {
+        const localSettings = loadSettingsLocally(user.id);
+        if (localSettings) {
+          setAutoTranscribe(localSettings.autoTranscribe ?? true);
+          setAutoSummarize(localSettings.autoSummarize ?? false);
+        }
+      }
     }
-  }, [profile]);
+  }, [profile, user]);
+
+  // Track changes to enable/disable save button
+  useEffect(() => {
+    if (profile) {
+      const hasProfileChanges = 
+        cloudSyncEnabled !== profile.cloud_sync_enabled ||
+        autoCloudSync !== profile.auto_cloud_sync ||
+        deletionPolicy !== (profile.deletion_policy_days === 0 ? 'never' : String(profile.deletion_policy_days));
+      
+      setHasChanges(hasProfileChanges);
+    }
+  }, [cloudSyncEnabled, autoCloudSync, deletionPolicy, profile]);
 
   // Defensive loading and authentication check
   useEffect(() => {
@@ -57,6 +86,67 @@ export default function SettingsPage() {
       router.push('/login');
     }
   }, [user, isLoading, router]);
+
+  // Handle Save Changes
+  const handleSaveChanges = async () => {
+    if (!user || !profile) return;
+    
+    setIsSaving(true);
+    try {
+      // Prepare settings object for Supabase
+      const settingsToSave = {
+        cloud_sync_enabled: cloudSyncEnabled,
+        auto_cloud_sync: autoCloudSync,
+        deletion_policy_days: deletionPolicy === 'never' ? 0 : parseInt(deletionPolicy),
+      };
+      
+      // Save to Supabase via updateProfile
+      await updateProfile(settingsToSave);
+      
+      // Save additional settings to localStorage
+      const localSettings: Partial<UserSettings> = {
+        cloudSyncEnabled,
+        autoCloudSync,
+        deletionPolicyDays: deletionPolicy === 'never' ? 0 : parseInt(deletionPolicy),
+        autoTranscribe,
+        autoSummarize,
+      };
+      
+      saveSettingsLocally(user.id, localSettings);
+      
+      toast({ 
+        title: "Settings Saved!", 
+        description: "Your preferences have been updated successfully." 
+      });
+      
+      setHasChanges(false);
+    } catch (error: any) {
+      console.error("Error saving settings:", error);
+      toast({ 
+        title: "Error", 
+        description: error.message || "Failed to save settings.", 
+        variant: "destructive" 
+      });
+    } finally {
+      setIsSaving(false);
+    }
+  };
+
+  // Handle discard changes
+  const handleDiscardChanges = () => {
+    if (profile) {
+      setCloudSyncEnabled(profile.cloud_sync_enabled || false);
+      setAutoCloudSync(profile.auto_cloud_sync || false);
+      setDeletionPolicy(profile.deletion_policy_days === 0 ? 'never' : String(profile.deletion_policy_days));
+      
+      toast({ 
+        title: "Changes Discarded", 
+        description: "Your changes have been reset." 
+      });
+      
+      setHasChanges(false);
+    }
+  };
 
   if (isLoading || !user || !profile) {
     return (
@@ -68,48 +158,6 @@ export default function SettingsPage() {
       </div>
     );
   }
-
-  // Handle Save Changes
-  const handleSaveChanges = async () => {
-    if (!user || !profile) return;
-    
-    setIsSaving(true);
-    try {
-      console.log("Saving settings:", { cloudSyncEnabled, autoCloudSync, deletionPolicy });
-      
-      const { error } = await getSupabaseBrowserClient()
-        .from('profiles')
-        .update({
-          cloud_sync_enabled: cloudSyncEnabled,
-          auto_cloud_sync: autoCloudSync,
-          deletion_policy_days: deletionPolicy === 'never' ? 0 : parseInt(deletionPolicy),
-        })
-        .eq('id', user.id);
-
-      if (error) {
-        console.error("Error saving settings:", error);
-        toast({ 
-          title: "Error", 
-          description: error.message || "Failed to save settings.", 
-          variant: "destructive" 
-        });
-      } else {
-        toast({ 
-          title: "Settings Saved!", 
-          description: "Your preferences have been updated successfully." 
-        });
-      }
-    } catch (error: any) {
-      console.error("Unexpected error saving settings:", error);
-      toast({ 
-        title: "Error", 
-        description: error.message || "An unexpected error occurred.", 
-        variant: "destructive" 
-      });
-    } finally {
-      setIsSaving(false);
-    }
-  };
 
   const isProUser = profile.has_purchased_app || profile.current_plan === 'full_app_purchase';
 
@@ -271,6 +319,53 @@ export default function SettingsPage() {
                   </RadioGroup>
                 </div>
 
+                {/* AI Features */}
+                <div className="space-y-4">
+                  <div>
+                    <Label className="text-dark-text-light font-medium flex items-center">
+                      <Sparkles className="w-4 h-4 mr-2" /> 
+                      AI Features
+                    </Label>
+                    <p className="text-sm text-dark-text-muted mt-1">
+                      Configure automatic AI processing for your recordings
+                    </p>
+                  </div>
+                  
+                  <div className="flex items-center justify-between p-4 bg-dark-tertiary-bg rounded-lg">
+                    <div className="flex-1">
+                      <Label htmlFor="auto-transcribe" className="text-dark-text-light font-medium">
+                        Auto-Transcribe
+                      </Label>
+                      <p className="text-sm text-dark-text-muted mt-1">
+                        Automatically transcribe new recordings (uses credits)
+                      </p>
+                    </div>
+                    <Switch 
+                      id="auto-transcribe" 
+                      checked={autoTranscribe} 
+                      onCheckedChange={setAutoTranscribe}
+                      className="data-[state=checked]:bg-accent-purple"
+                    />
+                  </div>
+                  
+                  <div className="flex items-center justify-between p-4 bg-dark-tertiary-bg rounded-lg">
+                    <div className="flex-1">
+                      <Label htmlFor="auto-summarize" className="text-dark-text-light font-medium">
+                        Auto-Summarize
+                      </Label>
+                      <p className="text-sm text-dark-text-muted mt-1">
+                        Automatically generate summaries for transcribed notes (uses credits)
+                      </p>
+                    </div>
+                    <Switch 
+                      id="auto-summarize" 
+                      checked={autoSummarize} 
+                      onCheckedChange={setAutoSummarize}
+                      className="data-[state=checked]:bg-accent-purple"
+                    />
+                  </div>
+                </div>
+
                 {/* Local Data Management */}
                 <div className="space-y-3">
                   <Label className="text-dark-text-light font-medium">Local Data Management</Label>
@@ -278,7 +373,10 @@ export default function SettingsPage() {
                     <Button 
                       variant="outline"
                       className="bg-dark-tertiary-bg border-dark-border-subtle text-dark-text-light hover:bg-dark-secondary-bg flex-1"
-                      onClick={() => toast({ title: "Coming Soon!", description: "Export functionality is under development." })}
+                      onClick={() => toast({ 
+                        title: "Coming Soon!", 
+                        description: "Export functionality is under development." 
+                      })}
                     >
                       <Download className="w-4 h-4 mr-2" />
                       Export All Data
@@ -286,7 +384,10 @@ export default function SettingsPage() {
                     <Button 
                       variant="outline"
                       className="bg-dark-tertiary-bg border-dark-border-subtle text-dark-text-light hover:bg-dark-secondary-bg flex-1"
-                      onClick={() => toast({ title: "Coming Soon!", description: "Import functionality is under development." })}
+                      onClick={() => toast({ 
+                        title: "Coming Soon!", 
+                        description: "Import functionality is under development." 
+                      })}
                     >
                       <Upload className="w-4 h-4 mr-2" />
                       Import Data
@@ -364,7 +465,10 @@ export default function SettingsPage() {
                 <Button 
                   variant="outline"
                   className="w-full justify-start bg-dark-tertiary-bg border-dark-border-subtle text-dark-text-light hover:bg-dark-secondary-bg"
-                  onClick={() => toast({ title: "Coming Soon!", description: "Keyboard shortcuts guide is under development." })}
+                  onClick={() => toast({ 
+                    title: "Coming Soon!", 
+                    description: "Keyboard shortcuts guide is under development." 
+                  })}
                 >
                   <Settings className="w-4 h-4 mr-2" />
                   Keyboard Shortcuts
@@ -372,21 +476,38 @@ export default function SettingsPage() {
               </CardContent>
             </Card>
 
-            {/* Save Changes Button */}
-            <Button 
-              className="w-full btn-gradient"
-              onClick={handleSaveChanges}
-              disabled={isSaving}
-            >
-              {isSaving ? (
-                <>
-                  <LoadingSpinner />
-                  <span className="ml-2">Saving...</span>
-                </>
-              ) : (
-                'Save Changes'
-              )}
-            </Button>
+            {/* Save/Discard Changes Buttons */}
+            {hasChanges && (
+              <div className="space-y-3">
+                <Button 
+                  className="w-full btn-gradient"
+                  onClick={handleSaveChanges}
+                  disabled={isSaving || !hasChanges}
+                >
+                  {isSaving ? (
+                    <>
+                      <LoadingSpinner />
+                      <span className="ml-2">Saving...</span>
+                    </>
+                  ) : (
+                    <>
+                      <Save className="w-4 h-4 mr-2" />
+                      Save Changes
+                    </>
+                  )}
+                </Button>
+                
+                <Button 
+                  variant="outline"
+                  className="w-full bg-dark-tertiary-bg border-dark-border-subtle text-dark-text-light"
+                  onClick={handleDiscardChanges}
+                  disabled={isSaving || !hasChanges}
+                >
+                  <X className="w-4 h-4 mr-2" />
+                  Discard Changes
+                </Button>
+              </div>
+            )}
 
             {/* Danger Zone */}
             <Card className="bg-dark-secondary-bg border-red-500/50 rounded-xl shadow-lg">
